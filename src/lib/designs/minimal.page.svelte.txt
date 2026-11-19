@@ -1,0 +1,259 @@
+<script lang="ts">
+  import { tick } from 'svelte';
+  import { ArrowUp, ArrowUpRight, SquarePen, Copy, Check, RotateCw } from '@lucide/svelte';
+  import { marked } from 'marked';
+  import DOMPurify from 'dompurify';
+  import BrandMark from '#lib/components/BrandMark.svelte';
+
+  interface Message {
+    role: 'bot' | 'user';
+    content: string;
+    isError?: boolean;
+  }
+
+  const CHARACTER_LIMIT = 400;
+  const HISTORY_LIMIT = 10; // max previous messages sent to the bot
+
+  const SUGGESTIONS = [
+    'What programmes does UNITEN offer?',
+    'Where is the UNITEN campus?',
+    'How do I apply for admission?',
+    'Who owns UNITEN?'
+  ];
+
+  let messages = $state<Message[]>([]);
+  let input = $state('');
+  let isLoading = $state(false);
+  let copiedIndex = $state<number | null>(null);
+  let scrollEl: HTMLDivElement | undefined;
+  let inputEl: HTMLInputElement | undefined;
+
+  async function scrollToBottom(smooth = true) {
+    await tick();
+    scrollEl?.scrollTo({ top: scrollEl.scrollHeight, behavior: smooth ? 'smooth' : 'auto' });
+  }
+
+  function renderMarkdown(src: string): string {
+    // Only called for bot messages, which exist only in the browser
+    return DOMPurify.sanitize(marked.parse(src, { async: false, gfm: true }));
+  }
+
+  async function send(text: string) {
+    const content = text.trim();
+    if (!content || isLoading) return;
+
+    // Last few real turns (no error notices) so the bot remembers the chat
+    const history = messages
+      .filter((m) => !m.isError && m.content)
+      .slice(-HISTORY_LIMIT)
+      .map((m) => ({ role: m.role === 'user' ? 'user' : 'assistant', content: m.content }));
+
+    messages.push({ role: 'user', content });
+    input = '';
+    isLoading = true;
+    scrollToBottom();
+
+    const fail = (reply: string) => messages.push({ role: 'bot', content: reply, isError: true });
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: content, history }),
+        signal: AbortSignal.timeout(45_000)
+      });
+
+      if (!response.ok || !response.body) {
+        const data = await response.json().catch(() => null);
+        fail(data?.reply ?? 'Something went wrong. Please try again.');
+      } else {
+        // Stream the reply into a new bot message as it arrives
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let started = false;
+        let idx = -1;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          if (!started) {
+            messages.push({ role: 'bot', content: '' });
+            idx = messages.length - 1;
+            started = true;
+            isLoading = false;
+          }
+          messages[idx].content += chunk;
+          scrollToBottom(false);
+        }
+        if (!started) fail("I couldn't generate a reply. Please try again.");
+      }
+    } catch {
+      fail("Couldn't get a reply in time. Please try again.");
+    } finally {
+      isLoading = false;
+      scrollToBottom();
+      inputEl?.focus();
+    }
+  }
+
+  function newChat() {
+    if (isLoading) return;
+    messages = [];
+    input = '';
+    inputEl?.focus();
+  }
+
+  function regenerate() {
+    if (isLoading) return;
+    while (messages.length && messages[messages.length - 1].role === 'bot') messages.pop();
+    const last = messages.pop();
+    if (last) send(last.content);
+  }
+
+  async function copy(i: number) {
+    await navigator.clipboard.writeText(messages[i].content);
+    copiedIndex = i;
+    setTimeout(() => (copiedIndex = null), 1500);
+  }
+</script>
+
+<div class="flex flex-col h-dvh bg-canvas text-ink">
+  <header class="relative shrink-0 bg-canvas/90 backdrop-blur">
+    <div class="max-w-3xl mx-auto h-14 px-4 md:px-6 flex items-center gap-3">
+      <BrandMark size={32} />
+      <div class="leading-tight min-w-0">
+        <h1 class="text-sm font-semibold tracking-tight truncate">UNITEN Assistant</h1>
+        <p class="text-[11px] text-muted truncate">Universiti Tenaga Nasional</p>
+      </div>
+      <button
+        onclick={newChat}
+        disabled={messages.length === 0}
+        class="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium text-muted hover:text-accent hover:bg-accent/10 transition disabled:opacity-0 disabled:pointer-events-none"
+      >
+        <SquarePen size={14} />
+        New chat
+      </button>
+    </div>
+    <div class="h-0.5 bg-gradient-to-r from-transparent via-accent to-transparent opacity-70"></div>
+  </header>
+
+  <div bind:this={scrollEl} class="flex-1 overflow-y-auto">
+    <div class="max-w-3xl mx-auto px-4 md:px-6 py-8">
+      {#if messages.length === 0 && !isLoading}
+        <div class="min-h-[60vh] flex flex-col justify-center animate-rise">
+          <div class="relative w-20 h-20 mb-8">
+            <div class="glow absolute -inset-8" aria-hidden="true"></div>
+            <BrandMark size={80} class="relative" />
+          </div>
+          <h2 class="text-4xl md:text-5xl font-semibold tracking-tight leading-[1.1] mb-4">
+            What would you like to<br />know about <span class="text-accent">UNITEN</span>?
+          </h2>
+          <p class="text-muted max-w-md mb-10">
+            Programmes, admission, campus life and more. If I don't know the answer, I'll say so.
+          </p>
+          <ul class="max-w-xl border-t border-line">
+            {#each SUGGESTIONS as text (text)}
+              <li class="border-b border-line">
+                <button
+                  onclick={() => send(text)}
+                  class="group w-full flex items-center justify-between gap-4 py-3.5 text-left text-[15px] hover:text-accent transition-colors"
+                >
+                  {text}
+                  <ArrowUpRight
+                    size={18}
+                    class="shrink-0 text-muted group-hover:text-accent group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition"
+                  />
+                </button>
+              </li>
+            {/each}
+          </ul>
+        </div>
+      {:else}
+        <div class="space-y-8">
+          {#each messages as msg, i}
+            {#if msg.role === 'user'}
+              <div class="flex justify-end animate-rise">
+                <div
+                  class="max-w-[85%] md:max-w-[75%] px-4 py-2.5 rounded-3xl rounded-br-lg bg-bubble text-bubble-ink text-[15px] leading-relaxed whitespace-pre-wrap break-words"
+                >
+                  {msg.content}
+                </div>
+              </div>
+            {:else}
+              <div class="flex gap-3 animate-rise">
+                <BrandMark size={28} class="mt-0.5" />
+                <div class="min-w-0 flex-1">
+                  <div class="md text-[15.5px] leading-relaxed break-words {msg.isError ? 'text-accent' : ''}">
+                    {@html renderMarkdown(msg.content)}
+                  </div>
+                  {#if !msg.isError}
+                    <div class="mt-2 flex items-center gap-1 -ml-1.5 text-muted">
+                      <button
+                        onclick={() => copy(i)}
+                        aria-label="Copy reply"
+                        class="p-1.5 rounded-md hover:text-accent hover:bg-accent/10 transition"
+                      >
+                        {#if copiedIndex === i}<Check size={14} />{:else}<Copy size={14} />{/if}
+                      </button>
+                      {#if i === messages.length - 1}
+                        <button
+                          onclick={regenerate}
+                          aria-label="Regenerate reply"
+                          class="p-1.5 rounded-md hover:text-accent hover:bg-accent/10 transition"
+                        >
+                          <RotateCw size={14} />
+                        </button>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+          {/each}
+
+          {#if isLoading}
+            <div class="flex gap-3" aria-label="Bot is thinking">
+              <BrandMark size={28} class="mt-0.5" />
+              <span class="pulse-dot mt-2.5 w-2.5 h-2.5 rounded-full bg-accent"></span>
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
+  </div>
+
+  <div class="shrink-0 px-4 md:px-6 pb-4 md:pb-6 pt-2">
+    <form
+      onsubmit={(e) => {
+        e.preventDefault();
+        send(input);
+      }}
+      class="max-w-3xl mx-auto flex items-center gap-2 pl-6 pr-2.5 py-2.5 rounded-3xl border border-line bg-panel shadow-xl shadow-red-950/5 focus-within:border-accent focus-within:ring-4 focus-within:ring-accent/15 transition"
+    >
+      <input
+        bind:this={inputEl}
+        type="text"
+        bind:value={input}
+        maxlength={CHARACTER_LIMIT}
+        placeholder="Ask about UNITEN…"
+        aria-label="Message"
+        class="flex-1 min-w-0 bg-transparent py-2 text-base outline-none placeholder:text-muted"
+      />
+      {#if input.length >= CHARACTER_LIMIT - 50}
+        <span class="text-xs tabular-nums text-muted">{input.length}/{CHARACTER_LIMIT}</span>
+      {/if}
+      <button
+        type="submit"
+        disabled={isLoading || !input.trim()}
+        aria-label="Send message"
+        class="w-11 h-11 rounded-full bg-accent text-accent-ink grid place-items-center shrink-0 hover:brightness-110 active:scale-95 transition disabled:bg-rail disabled:text-muted disabled:cursor-not-allowed"
+      >
+        <ArrowUp size={20} strokeWidth={2.5} />
+      </button>
+    </form>
+    <p class="max-w-3xl mx-auto mt-2.5 text-center text-[11px] text-muted">
+      AI-generated answers may be inaccurate. Verify important details with UNITEN. Messages are processed by
+      Google Gemini.
+    </p>
+  </div>
+</div>
