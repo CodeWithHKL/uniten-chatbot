@@ -112,6 +112,10 @@ the chat still works.
 
 `npm run build` uses the Vercel adapter, which creates symlinks. Run it on Vercel, Linux or WSL, not plain Windows.
 
+## Architecture
+
+![Architecture diagram](docs/Architecture%20Diagram.png)
+
 ## How it works
 
 ```
