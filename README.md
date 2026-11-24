@@ -4,7 +4,7 @@ An AI chatbot for Universiti Tenaga Nasional (UNITEN), Malaysia. It answers ques
 campus life and more, using Google Gemini and the content of the official [uniten.edu.my](https://www.uniten.edu.my/)
 website.
 
-> **Unofficial concept project.** It is not an official UNITEN product. Answers are AI-generated and can be wrong,
+> **Unofficial concept project.** It is not an official UNITEN product created by students. Answers are AI-generated and can be wrong,
 > so important details (fees, intakes, entry requirements) should be confirmed with UNITEN.
 
 ## Features
